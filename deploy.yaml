@@ -1,0 +1,115 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: thrift-demo-server
+  name: thrift-demo-server
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: thrift-demo-server
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: thrift-demo-server
+    spec:
+      containers:
+      - image: tong16/thrift-example
+        args:
+        - -server=true
+        - -secure=false
+        imagePullPolicy: Always
+        name: demo
+        resources: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    service: thrift-demo-server
+  name: thrift-demo-server
+spec:
+  ports:
+  - port: 10005
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app: thrift-demo-server
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: thrift-demo-client
+  name: thrift-demo-client
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: thrift-demo-client
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: thrift-demo-client
+    spec:
+      containers:
+      - image: tong16/thrift-example
+        args:
+        - -server=true
+        - -secure=false
+        imagePullPolicy: Always
+        name: demo
+        resources: {}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: thrift-demo
+spec:
+  configPatches:
+  - applyTo: NETWORK_FILTER
+    match:
+      context: SIDECAR_OUTBOUND # will match outbound listeners in all sidecars
+      listener:
+        # The port dedicated to thirft
+        portNumber: 10005
+        filterChain:
+          filter:
+            name: envoy.tcp_proxy
+    patch:
+      operation: REMOVE
+  - applyTo: NETWORK_FILTER
+    match:
+      # context omitted so that this applies to both sidecars and gateways
+      listener:
+        filterChain:
+          filter:
+            name: mixer
+    patch:
+      operation: INSERT_AFTER
+      value:
+        name: envoy.filters.network.thrift_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.config.filter.network.thrift_proxy.v3alpha.ThriftProxy
+          thrift_filters:
+          - name: envoy.filters.thrift.router
+          route_config:
+            routes:
+            - match:
+                # empty string matches any request method name
+                method_name: ""
+              route:
+                cluster: thrift-service
