@@ -1,4 +1,4 @@
-include "User.thrift"
+include "user.thrift"
 
 namespace go Sample
 
@@ -12,7 +12,7 @@ struct Response {
 
 service Greeter {
     Response SayHello(
-        1:required User.User user
+        1:required user.User user
     )
 
     Response GetUser(

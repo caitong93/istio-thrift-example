@@ -1,4 +1,4 @@
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
@@ -21,10 +21,9 @@ spec:
         app: thrift-demo-server
     spec:
       containers:
-      - image: tong16/thrift-example
+      - image: tong16/thrift-example:v0.0.1
         args:
         - -server=true
-        - -secure=false
         - -addr=0.0.0.0:9090
         imagePullPolicy: Always
         name: demo
@@ -41,10 +40,13 @@ spec:
   - port: 10005
     protocol: TCP
     targetPort: 9090
+    # See https://istio.io/latest/docs/ops/configuration/traffic-management/protocol-selection/
+    # Setting protocol to tcp, so istio will place envoy.tcp_proxy at the end of the filter chain.
+    name: tcp
   selector:
     app: thrift-demo-server
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
@@ -65,16 +67,20 @@ spec:
     metadata:
       labels:
         app: thrift-demo-client
+      annotations:
+        # Override default stats inclusion prefixes to enable thrift stats.
+        sidecar.istio.io/statsInclusionPrefixes: reporter=,component,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grpc,ssl_context_update_by_sds,thrift
     spec:
       containers:
-      - image: tong16/thrift-example
+      - image: tong16/thrift-example:v0.0.1
         args:
         - -server=true
-        - -secure=false
+        - -addr=0.0.0.0:9090
         imagePullPolicy: Always
         name: demo
         resources: {}
 ---
+# https://istio.io/latest/docs/reference/config/networking/envoy-filter/
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
@@ -83,7 +89,8 @@ spec:
   configPatches:
   - applyTo: NETWORK_FILTER
     match:
-      context: SIDECAR_OUTBOUND # will match outbound listeners in all sidecars
+      # will match outbound listeners in all sidecars
+      context: SIDECAR_OUTBOUND 
       listener:
         # The port dedicated to thirft
         portNumber: 10005
@@ -91,22 +98,23 @@ spec:
           filter:
             name: envoy.tcp_proxy
     patch:
+      # Remove envoy.tcp_proxy filter
       operation: REMOVE
   - applyTo: NETWORK_FILTER
     match:
+      # will match outbound listeners in all sidecars
       context: SIDECAR_OUTBOUND
-      # context omitted so that this applies to both sidecars and gateways
       listener:
+        # The port dedicated to thirft
         portNumber: 10005
-        filterChain:
-          filter:
-            name: mixer
     patch:
-      operation: INSERT_AFTER
+      operation: INSERT_FIRST
       value:
         name: envoy.filters.network.thrift_proxy
         config:
           stat_prefix: "outbound|10005||thrift-demo-server.thrift-demo.svc.cluster.local"
+          transport: AUTO_TRANSPORT
+          protocol: AUTO_PROTOCOL
           thrift_filters:
           - name: envoy.filters.thrift.router
           route_config:
